@@ -8,9 +8,17 @@
 #include <Adafruit_Sensor.h>
 #include <arduinoFFT.h>
 #include <math.h>
-#include "secrets.h" // define WIFI_SSID, WIFI_PASS, MQTT_BROKER, MQTT_PORT, MQTT_USER, MQTT_PASS, MQTT_CLIENTID
 
 // -------- Config --------
+#define WIFI_SSID     "SEU_SSID"       // Substitua pelo seu SSID
+#define WIFI_PASS     "SUA_SENHA"      // Substitua pela sua senha de Wi-Fi
+
+#define MQTT_BROKER   "SEU_BROKER_IP" // Substitua pelo IP do seu broker MQTT
+#define MQTT_PORT     1883
+#define MQTT_USER     ""               // Se não usar usuário, deixe vazio
+#define MQTT_PASS     ""               // Se não usar senha, deixe vazio
+#define MQTT_CLIENTID "esp32-vibe-01"
+
 #define MQTT_TOPIC_SUMMARY "tcc/vibration/summary"
 #define MQTT_TOPIC_DEBUG   "tcc/vibration/debug"
 
