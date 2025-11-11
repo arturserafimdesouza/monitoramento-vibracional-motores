@@ -1,9 +1,5 @@
-/*
-  ESP32 + MPU6050 (Adafruit) + FFT (ArduinoFFT) + MQTT (PubSubClient)
-  Fs: 400 Hz | N: 256 (∆f ≈ 1.5625 Hz)
-  Tópicos: tcc/vibration/summary (JSON), tcc/vibration/debug
-  Ligações: SCL->D22, SDA->D21, ADO -> GND ,VCC->3V3, GND->GND
-*/
+// ESP32 vibration monitor — MPU6050 + FFT (arduinoFFT 2.0.4) + MQTT (PubSubClient)
+// Amostragem: 256 @ 400 Hz | Publica JSON em tcc/vibration/summary
 
 #include <WiFi.h>
 #include <PubSubClient.h>
@@ -12,47 +8,33 @@
 #include <Adafruit_Sensor.h>
 #include <arduinoFFT.h>
 #include <math.h>
+#include "secrets.h" // define WIFI_SSID, WIFI_PASS, MQTT_BROKER, MQTT_PORT, MQTT_USER, MQTT_PASS, MQTT_CLIENTID
 
-//====================== CONFIG ======================
-#define WIFI_SSID   "IGOR_2G"
-#define WIFI_PASS   "6975940704"
-
-#define MQTT_BROKER "192.168.0.55"
-#define MQTT_PORT   1883
-#define MQTT_USER   ""
-#define MQTT_PASS   ""
-#define MQTT_CLIENTID "esp32-vibe-01"
-
+// -------- Config --------
 #define MQTT_TOPIC_SUMMARY "tcc/vibration/summary"
 #define MQTT_TOPIC_DEBUG   "tcc/vibration/debug"
 
-#define FFT_AXIS 'X'          // 'X' | 'Y' | 'Z'
+#define FFT_AXIS 'X'      // 'X' | 'Y' | 'Z'
 #define SAMPLES  256
 #define FS       400.0
 
-#define USE_G_UNITS false     // true => valores em g, false => m/s^2
+#define USE_G_UNITS false // true => g ; false => m/s^2
 
 #define I2C_SDA 21
 #define I2C_SCL 22
 #define DEBUG_SERIAL 1
 
-// ---- Thresholds (ajuste conforme teu caso) ----
-// vibração (RMS após remover média)
+// Limiares (histerese)
 #define THRESH_RMS_DYN_ON   0.20
 #define THRESH_RMS_DYN_OFF  0.12
-// inclinação lenta (delta da média entre blocos)
 #define THRESH_MEAN_DEL_ON  0.40
 #define THRESH_MEAN_DEL_OFF 0.25
-// amplitude do bloco (max - min)
 #define THRESH_RANGE_ON     1.00
 #define THRESH_RANGE_OFF    0.70
-// giroscópio (RMS do módulo em deg/s)
 #define THRESH_GYRO_RMS_ON  6.0
 #define THRESH_GYRO_RMS_OFF 3.0
-
-// quantos blocos consecutivos para alternar o estado
-#define DEBOUNCE_BLOCKS 3
-//=================================================
+#define DEBOUNCE_BLOCKS     3
+// ------------------------
 
 Adafruit_MPU6050 mpu;
 WiFiClient espClient;
@@ -65,8 +47,8 @@ float baseX=0, baseY=0, baseZ=0;
 
 double lastMean=0.0, lastMin=0.0, lastMax=0.0;
 double prevMean=0.0;
-double rms_raw=0.0;      // antes de remover média
-double gyro_rms=0.0;     // RMS do módulo do gyro (deg/s)
+double rms_raw=0.0;
+double gyro_rms=0.0;
 
 bool moving=false;
 uint8_t cnt_on=0, cnt_off=0;
@@ -75,7 +57,7 @@ static inline float toUnits(float a_ms2){
   return USE_G_UNITS ? (a_ms2/9.80665f) : a_ms2;
 }
 
-//-------------------- WiFi/MQTT --------------------
+// -------- WiFi/MQTT --------
 void connectWiFi(){
 #if DEBUG_SERIAL
   Serial.printf("Conectando ao WiFi: %s\n", WIFI_SSID);
@@ -102,9 +84,10 @@ void connectMQTT(){
 #if DEBUG_SERIAL
     Serial.printf("MQTT %s:%d ...\n", MQTT_BROKER, MQTT_PORT);
 #endif
-    bool ok = String(MQTT_USER).length()>0 ?
-      mqttClient.connect(MQTT_CLIENTID, MQTT_USER, MQTT_PASS) :
-      mqttClient.connect(MQTT_CLIENTID);
+    bool ok = (String(MQTT_USER).length()>0)
+      ? mqttClient.connect(MQTT_CLIENTID, MQTT_USER, MQTT_PASS)
+      : mqttClient.connect(MQTT_CLIENTID);
+
     if(ok){
 #if DEBUG_SERIAL
       Serial.println("MQTT conectado!");
@@ -119,7 +102,7 @@ void connectMQTT(){
   }
 }
 
-//-------------------- Calibração --------------------
+// -------- Calibração --------
 void calibrateBaseline(uint16_t n=300){
 #if DEBUG_SERIAL
   Serial.println("Calibrando baseline...");
@@ -141,7 +124,7 @@ void calibrateBaseline(uint16_t n=300){
 #endif
 }
 
-//---------------- Amostragem + métricas -----------
+// -------- Amostragem + métricas --------
 void sampleBlock(uint16_t n, double fs, char axis){
   const uint32_t period_us = (uint32_t)(1000000.0/fs + 0.5);
   uint32_t tNext = micros();
@@ -162,29 +145,24 @@ void sampleBlock(uint16_t n, double fs, char axis){
     switch(axis){
       case 'Y': s = ay; break;
       case 'Z': s = az; break;
-      case 'X':
-      default:  s = ax; break;
+      default : s = ax; break;
     }
     if (USE_G_UNITS) s/=9.80665f;
 
-    // guarda para FFT (por enquanto com DC; removemos depois)
     vReal[i]=s; vImag[i]=0.0;
 
-    // métricas do bloco (antes do detrend)
     sum   += s;
     sumsq += (double)s*s;
     if (s<vmin) vmin=s;
     if (s>vmax) vmax=s;
 
-    // módulo do gyro em deg/s (a biblioteca já dá em rad/s? -> Adafruit_MPU6050 dá em rad/s por padrão!
-    // Converter para deg/s para uso intuitivo)
+    // giroscópio em deg/s
     float gx = g.gyro.x * 57.2957795f;
     float gy = g.gyro.y * 57.2957795f;
     float gz = g.gyro.z * 57.2957795f;
     float gn = sqrtf(gx*gx + gy*gy + gz*gz);
     gyro_sumsq += (double)gn*gn;
 
-    // temporização
     tNext += period_us;
     while ((int32_t)(micros()-tNext) < 0) { /* wait */ }
   }
@@ -195,7 +173,6 @@ void sampleBlock(uint16_t n, double fs, char axis){
   lastMax  = vmax;
   gyro_rms = sqrt(gyro_sumsq/n);
 
-  // remove DC para FFT e RMS dinâmico
   for(uint16_t i=0;i<n;i++) vReal[i]-=lastMean;
 }
 
@@ -214,27 +191,27 @@ void computeFFT_andPeak(double &peakFreq, double &peakAmp){
     if(vReal[i]>pv){ pv=vReal[i]; k=i; }
   }
   peakFreq = (k*FS)/SAMPLES;
-  peakAmp  = pv; // magnitude relativa (com janela; comparar entre blocos)
+  peakAmp  = pv;
 }
 
-//--------- Atualiza estado de movimento (histerese) ----------
+// -------- Histerese de estado --------
 bool updateMoving(double rms_dyn, double dmean, double range, double gyro){
-  bool trigger_on  = (rms_dyn >= THRESH_RMS_DYN_ON)  ||
-                     (fabs(dmean) >= THRESH_MEAN_DEL_ON) ||
-                     (range >= THRESH_RANGE_ON) ||
-                     (gyro >= THRESH_GYRO_RMS_ON);
+  bool on  = (rms_dyn >= THRESH_RMS_DYN_ON) ||
+             (fabs(dmean) >= THRESH_MEAN_DEL_ON) ||
+             (range >= THRESH_RANGE_ON) ||
+             (gyro >= THRESH_GYRO_RMS_ON);
 
-  bool trigger_off = (rms_dyn <  THRESH_RMS_DYN_OFF) &&
-                     (fabs(dmean) < THRESH_MEAN_DEL_OFF) &&
-                     (range < THRESH_RANGE_OFF) &&
-                     (gyro < THRESH_GYRO_RMS_OFF);
+  bool off = (rms_dyn <  THRESH_RMS_DYN_OFF) &&
+             (fabs(dmean) < THRESH_MEAN_DEL_OFF) &&
+             (range < THRESH_RANGE_OFF) &&
+             (gyro < THRESH_GYRO_RMS_OFF);
 
   if (moving){
-    if (trigger_off) { cnt_off++; cnt_on=0; }
+    if (off) { cnt_off++; cnt_on=0; }
     else { cnt_off=0; }
     if (cnt_off >= DEBOUNCE_BLOCKS) { moving=false; cnt_off=0; }
   } else {
-    if (trigger_on) { cnt_on++; cnt_off=0; }
+    if (on) { cnt_on++; cnt_off=0; }
     else { cnt_on=0; }
     if (cnt_on >= DEBOUNCE_BLOCKS) { moving=true; cnt_on=0; }
   }
@@ -274,22 +251,17 @@ void loop(){
   if (!mqttClient.connected()) connectMQTT();
   mqttClient.loop();
 
-  // 1) Amostra + métricas do bloco
   sampleBlock(SAMPLES, FS, FFT_AXIS);
 
-  // 2) RMS dinâmico (após remover média)
   double rms_dyn = computeRMS(vReal, SAMPLES);
   double dmean   = lastMean - prevMean;
   double range   = lastMax - lastMin;
 
-  // 3) FFT
   double peakFreq=0.0, peakAmp=0.0;
   computeFFT_andPeak(peakFreq, peakAmp);
 
-  // 4) Atualiza estado de movimento
   bool isMoving = updateMoving(rms_dyn, dmean, range, gyro_rms);
 
-  // 5) Publica JSON
   char payload[768];
   snprintf(payload, sizeof(payload),
     "{"
@@ -310,31 +282,20 @@ void loop(){
       "\"peak_freq\":%.2f,"
       "\"peak_amp\":%.6f"
     "}",
-    MQTT_CLIENTID,
-    FFT_AXIS,
-    FS,
-    SAMPLES,
+    MQTT_CLIENTID, FFT_AXIS, FS, SAMPLES,
     USE_G_UNITS ? "g" : "m/s^2",
-    lastMean,
-    dmean,
-    lastMin,
-    lastMax,
-    range,
-    rms_raw,
-    rms_dyn,
-    gyro_rms,
+    lastMean, dmean, lastMin, lastMax, range,
+    rms_raw, rms_dyn, gyro_rms,
     isMoving?"true":"false",
-    peakFreq,
-    peakAmp
+    peakFreq, peakAmp
   );
 
   bool ok = mqttClient.publish(MQTT_TOPIC_SUMMARY, payload);
 
 #if DEBUG_SERIAL
   Serial.printf(
-    "MQTT summary -> %s | axis=%c fs=%.1f n=%d "
-    "mean=%.3f dmean=%.3f range=%.3f rms_raw=%.3f rms_dyn=%.3f gyro=%.2f "
-    "pf=%.2fHz pa=%.3f moving=%d\n",
+    "MQTT %s | axis=%c fs=%.1f n=%d mean=%.3f dmean=%.3f range=%.3f "
+    "rms_raw=%.3f rms_dyn=%.3f gyro=%.2f pf=%.2fHz pa=%.3f moving=%d\n",
     ok?"OK":"FALHA",
     FFT_AXIS, FS, SAMPLES,
     lastMean, dmean, range, rms_raw, rms_dyn, gyro_rms,
