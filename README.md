@@ -115,11 +115,3 @@ Essas informações são publicadas no broker MQTT para posterior visualização
 - [arduinoFFT](https://github.com/kosme/arduinoFFT) (Versão 2.0.4)
 - [PubSubClient](https://github.com/knolleary/pubsubclient) (Versão 2.8)
 
-## Custo do Hardware
-
-O custo do protótipo foi mantido baixo, utilizando componentes de fácil acesso e baixo custo:
-
-- **ESP32 DevKit**: R$ 50,00 - R$ 65,00
-- **MPU-6050**: R$ 18,90 - R$ 37,52
-- **Custo Total**: Aproximadamente R$ 80 - R$ 130
-
